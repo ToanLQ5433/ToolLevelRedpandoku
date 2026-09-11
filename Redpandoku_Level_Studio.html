@@ -318,6 +318,7 @@ progress{width:220px;height:10px}
       <button class="ghost sm" id="btnImportJson">📤 Nhập JSON (1 màn / cả bộ)</button>
       <button class="primary sm" id="btnExportAllJson">📥 Tải Toàn Bộ 50 Màn (JSON)</button>
       <button class="ghost sm" id="btnExportRangeJson">📥 Tải Theo Khoảng</button>
+      <button class="ghost sm" id="btnExportDevJson" title="Chỉ 6 trường dev cần: id, label, difficulty, size, regionGrid, solution">🧑‍💻 Tải JSON cho Dev</button>
       <input id="exportRangeFrom" type="number" min="1" max="50" placeholder="Từ" style="width:52px;padding:6px 6px;font-size:12px;border:1px solid var(--axis);border-radius:6px">
       <input id="exportRangeTo" type="number" min="1" max="50" placeholder="Đến" style="width:52px;padding:6px 6px;font-size:12px;border:1px solid var(--axis);border-radius:6px">
       <button class="ghost sm" id="btnResetProgress">🔄 Xóa Tiến Trình Chơi</button>
@@ -25840,6 +25841,39 @@ const LEVELS = [
       count: levels.length, levels: levels
     };
   }
+  /* ------------------------------------------------------------------------
+     BẢN XUẤT CHO DEV — chỉ những gì build game cần.
+
+     File đầy đủ mang theo cả telemetry của bộ sinh: `solver`, `difficultyRating`,
+     `diagnostic`, `generator`, `symmetry`, `quality`... — hữu ích cho người
+     thiết kế màn, nhưng với phía dev thì đó là ~1,5 KB rác mỗi màn (bộ 100 màn
+     phình từ ~30 KB lên ~300 KB) và là sáu khoá nữa phải bỏ qua khi parse.
+
+     Giữ đúng sáu trường: id, label, difficulty, size, regionGrid, solution.
+
+     NGOẠI LỆ DUY NHẤT: `givens` (gấu trúc đặt sẵn). Nó KHÔNG phải metadata mà
+     là một phần của đề bài — bỏ đi thì màn dev nhận được là một câu đố khác,
+     và với bàn chỉ khoá về 1 nghiệm NHỜ gấu sẵn thì thành ra nhiều nghiệm.
+     Nên chỉ đính kèm khi màn thật sự có, và nói rõ trong banner.
+     --------------------------------------------------------------------- */
+  const DEV_FIELDS = ['id', 'label', 'difficulty', 'size', 'regionGrid', 'solution'];
+  function devSlim(level) {
+    const out = {};
+    DEV_FIELDS.forEach((k) => { if (level[k] !== undefined) out[k] = level[k]; });
+    if (Array.isArray(level.givens) && level.givens.length) out.givens = level.givens.slice();
+    return out;
+  }
+  $('btnExportDevJson').onclick = () => {
+    const slim = workingLevels.map(devSlim);
+    const withGivens = slim.filter((l) => l.givens).length;
+    const tag = activeBranch === 'main' ? 'Main' : 'Daily';
+    downloadJsonFile(slim, 'Redpandoku_' + tag + '_' + slim.length + '_Levels_DEV.json');
+    const full = JSON.stringify(branchBundle(workingLevels)).length;
+    const cut = JSON.stringify(slim).length;
+    showSavedBanner('🧑‍💻 Đã tải bản DEV: ' + slim.length + ' màn, ' +
+      Math.round(cut / 1024) + ' KB (bản đầy đủ ' + Math.round(full / 1024) + ' KB)' +
+      (withGivens ? ' · ' + withGivens + ' màn có 🐼 gấu đặt sẵn nên kèm thêm khoá givens' : '') + '.');
+  };
   $('btnExportAllJson').onclick = () => {
     const tag = activeBranch === 'main' ? 'Main' : 'Daily';
     downloadJsonFile(branchBundle(workingLevels),
