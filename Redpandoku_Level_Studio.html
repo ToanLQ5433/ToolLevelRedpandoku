@@ -347,6 +347,7 @@ progress{width:220px;height:10px}
     <section class="card" style="padding:14px">
       <h3 style="margin-top:0;margin-bottom:8px;font-size:13px;text-transform:uppercase;color:#475569"><span id="chListTitle">Màn Rừng Phong</span></h3>
       <div class="branch-bar" id="branchBar"></div>
+      <div id="branchTools" class="row sec-off" style="gap:6px;margin:0 0 8px"></div>
       <div class="ch-tab-bar" id="chTabBar">
         <div class="ch-tab active" data-ch="Tất cả">Tất cả</div>
         <div class="ch-tab" data-ch="Ki">Ki · Khởi</div>
@@ -24811,10 +24812,27 @@ const LEVELS = [
      branches[activeBranch] — nếu không thì liên kết bị đứt và thay đổi biến
      mất khi đổi nhánh.
      ========================================================================== */
+  /* `prefix` — nhãn số thứ tự của nhánh. Hai nhánh đánh số riêng nên phải
+     phân biệt được ngay khi nhìn: L07 là màn thứ 7 của Hành Trình Chính, còn
+     DL07 là màn thứ 7 của Thử Thách Ngày. */
   const BRANCHES = {
-    main: { key: 'main', name: 'Hành Trình Chính', emoji: '🏔️', note: '100 màn theo đường cong Khởi–Thừa–Chuyển–Kết' },
-    daily: { key: 'daily', name: 'Thử Thách Ngày', emoji: '📅', note: 'màn có hình vẽ, mỗi ngày một màn' }
+    main: { key: 'main', name: 'Hành Trình Chính', emoji: '🏔️', prefix: 'L', note: '100 màn theo đường cong Khởi–Thừa–Chuyển–Kết' },
+    daily: { key: 'daily', name: 'Thử Thách Ngày', emoji: '📅', prefix: 'DL', note: 'màn có hình vẽ, mỗi ngày một màn' }
   };
+
+  /* NHÃN SỐ THỨ TỰ CỦA MỘT MÀN.
+
+     `id` LUÔN bằng vị trí trong nhánh — `deleteLevel` đã đánh số lại sau mỗi
+     lần xoá đúng theo giao ước đó. Nhưng thao tác KÉO ĐỔI CHỖ thì quên: nó chỉ
+     hoán vị mảng mà không đánh số lại, nên kéo màn số 1 xuống cuối danh sách
+     thì nó vẫn hiện "L01" ở đáy — số thứ tự nói một đằng, vị trí một nẻo, và
+     mọi thứ khoá theo id (tiến độ đã giải, chặn trùng khi nhập JSON) lệch theo.
+     `resequenceBranch` bên dưới là chỗ duy nhất đánh số lại, dùng chung cho cả
+     xoá, đổi chỗ và xáo trộn.                                                */
+  function levelTag(level, branchKey) {
+    const b = BRANCHES[branchKey || activeBranch];
+    return (b && b.prefix ? b.prefix : 'L') + String(level.id).padStart(2, '0');
+  }
   const DRAFT_KEY = 'redpandoku_draft_v2';
   const DRAFT_KEY_V1 = 'redpandoku_draft_v1';
   function loadDraft() {
@@ -24998,7 +25016,7 @@ const LEVELS = [
       div.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
           <span class="drag-handle">☰</span>
-          <b style="font-size:12px;flex:1">L${String(lvl.id).padStart(2, '0')} · ${lvl.name || ('Level ' + lvl.id)}</b>
+          <b style="font-size:12px;flex:1">${levelTag(lvl)} · ${lvl.name || ('Level ' + lvl.id)}</b>
           ${tierPillHtml(lvl.difficulty)}
         </div>
         <div class="hint" style="font-size:11px">${lvl.size}×${lvl.size} · ${lvl.size} vùng${lvl.phase ? ' · ' + lvl.phase : ''}${progress[activeBranch + ':' + lvl.id] ? ' · ✅ Đã giải' : ''} ${pacingBadgeHtml(lvl.pacingBadge)}</div>
@@ -25011,11 +25029,18 @@ const LEVELS = [
       div.addEventListener('drop', (e) => {
         e.preventDefault(); div.classList.remove('drag-over');
         if (dragSrcIdx === null || dragSrcIdx === i) return;
+        // cờ "đã giải" phải ĐI THEO màn khi màn đổi chỗ, không đứng yên theo số
+        const solved = workingLevels.map((l) => !!progress[activeBranch + ':' + l.id]);
         const moved = workingLevels.splice(dragSrcIdx, 1)[0];
+        const movedSolved = solved.splice(dragSrcIdx, 1)[0];
         workingLevels.splice(i, 0, moved);
+        solved.splice(i, 0, movedSolved);
         if (currentLevelIdx === dragSrcIdx) currentLevelIdx = i;
         dragSrcIdx = null;
+        resequenceBranch(workingLevels, activeBranch, solved);
         renderLevelList();
+        renderProgressStrip();
+        openLevel(currentLevelIdx);
         saveDraft();
       });
       container.appendChild(div);
@@ -25056,28 +25081,38 @@ const LEVELS = [
      mọi thứ khoá theo id — tiến độ đã giải, khoá nhập JSON — sẽ lệch. Tiến độ
      cũng phải dồn theo, chứ không thì màn số 5 cũ thành số 4 và tự nhiên hiện
      "đã giải". */
+  /* ĐÁNH SỐ LẠI CẢ NHÁNH — `id` luôn bằng vị trí (1-based).
+     `solvedByPos` là cờ "đã giải" xếp theo THỨ TỰ MỚI của `list`, tức phải
+     hoán vị kèm khi màn đổi chỗ; nếu không thì màn số 5 cũ thành số 4 và tự
+     nhiên hiện "đã giải" dù người chơi chưa đụng tới. */
+  function resequenceBranch(list, branchKey, solvedByPos) {
+    list.forEach((l, i) => { l.id = String(i + 1); });
+    Object.keys(progress).forEach((k) => {
+      if (k.indexOf(branchKey + ':') === 0) delete progress[k];
+    });
+    (solvedByPos || []).forEach((s, i) => {
+      if (s) progress[branchKey + ':' + String(i + 1)] = true;
+    });
+    saveProgress();
+  }
+
   function deleteLevel(idx) {
     const list = workingLevels;
     if (idx < 0 || idx >= list.length) return;
     const gone = list[idx];
-    if (!confirm(`Xoá màn L${String(gone.id).padStart(2, '0')} · ${gone.name || ''} khỏi nhánh ` +
+    if (!confirm(`Xoá màn ${levelTag(gone)} · ${gone.name || ''} khỏi nhánh ` +
       `${BRANCHES[activeBranch].name}?\n\nKhông hoàn tác được (nhưng có thể nhập lại từ JSON).`)) return;
     // tiến độ đang khoá theo "nhánh:id" — dựng lại theo thứ tự mới
     const oldSolved = list.map((l) => !!progress[activeBranch + ':' + l.id]);
     oldSolved.splice(idx, 1);
     list.splice(idx, 1);
-    list.forEach((l, i) => { l.id = String(i + 1); });
-    Object.keys(progress).forEach((k) => {
-      if (k.indexOf(activeBranch + ':') === 0) delete progress[k];
-    });
-    oldSolved.forEach((s, i) => { if (s) progress[activeBranch + ':' + String(i + 1)] = true; });
-    saveProgress();
+    resequenceBranch(list, activeBranch, oldSolved);
     currentLevelIdx = Math.min(idx, list.length - 1);
     renderLevelList();
     renderProgressStrip();
     openLevel(currentLevelIdx);
     saveDraft();
-    showSavedBanner(`🗑️ Đã xoá "${gone.name || ('L' + gone.id)}". Các màn còn lại đã được đánh số lại.`);
+    showSavedBanner(`🗑️ Đã xoá "${gone.name || levelTag(gone)}". Các màn còn lại đã được đánh số lại.`);
   }
   if ($('btnDeleteLevel')) $('btnDeleteLevel').onclick = () => deleteLevel(currentLevelIdx);
   window.__redpandokuDeleteLevel = deleteLevel;
@@ -25095,7 +25130,7 @@ const LEVELS = [
     renderLevelList();
     openLevel(currentLevelIdx);
     saveDraft();
-    showSavedBanner(`✅ Đã đổi tên L${String(level.id).padStart(2, '0')} thành "${val}".`);
+    showSavedBanner(`✅ Đã đổi tên ${levelTag(level)} thành "${val}".`);
   };
 
   // ------------------------------------------------------------------------
@@ -26437,7 +26472,7 @@ const LEVELS = [
     play = newPlayState(level);
     if (progress[pKey(level)]) play.solved = true;
 
-    $('playLevelTitle').textContent = `L${String(level.id).padStart(2, '0')}${level.phase ? ' · ' + level.phase : ''} · ${level.difficulty} · ${level.size}×${level.size}`;
+    $('playLevelTitle').textContent = `${levelTag(level)}${level.phase ? ' · ' + level.phase : ''} · ${level.difficulty} · ${level.size}×${level.size}`;
     $('playLevelBadges').innerHTML = `
       ${tierPillHtml(level.difficulty)}
       <span class="chip">${level.size} vùng</span>
@@ -26566,7 +26601,7 @@ const LEVELS = [
   window.__redpandokuFindDuplicateAnywhere = findDuplicateAnywhere;
   function dupMessage(hit, branchKey) {
     const b = BRANCHES[branchKey];
-    const who = `L${String(hit.level.id).padStart(2, '0')} · ${hit.level.name || ''}`;
+    const who = `${levelTag(hit.level)} · ${hit.level.name || ''}`;
     if (hit.exact) {
       return `❌ Bị chặn: màn này TRÙNG HỆT <b>${who}</b> trong nhánh ${b.emoji} ${b.name} — ` +
         `kể cả sau khi xoay, lật hay đổi màu thì hai bản đồ vẫn y như nhau.`;
@@ -26657,6 +26692,79 @@ const LEVELS = [
     bar.querySelectorAll('.branch-tab').forEach((t) => {
       t.onclick = () => setBranch(t.dataset.branch);
     });
+    renderBranchTools();
+  }
+
+  /* NÚT RIÊNG CỦA TỪNG NHÁNH.
+
+     Hành Trình Chính có thứ tự là một phần của thiết kế — đường cong độ khó,
+     nhịp nghỉ, màn mốc — nên xáo trộn nó là phá. Thử Thách Ngày thì ngược lại:
+     mỗi màn đứng một mình, hay vì bố cục chứ không vì vị trí, nên thứ tự chỉ
+     là danh sách phát. Vì vậy nút Xáo trộn chỉ hiện ở nhánh này.             */
+  function renderBranchTools() {
+    const box = $('branchTools');
+    if (!box) return;
+    if (activeBranch !== 'daily') { box.classList.add('sec-off'); box.innerHTML = ''; return; }
+    box.classList.remove('sec-off');
+    box.innerHTML =
+      '<button class="ghost sm" id="btnShuffleBranch" title="Trộn ngẫu nhiên thứ tự các màn trong nhánh này">🔀 Xáo trộn</button>' +
+      '<button class="ghost sm" id="btnShuffleUndo" title="Hoàn tác lần xáo trộn gần nhất"' +
+      (shuffleUndo ? '' : ' disabled') + '>↩︎ Hoàn tác</button>';
+    $('btnShuffleBranch').onclick = shuffleBranch;
+    $('btnShuffleUndo').onclick = undoShuffle;
+  }
+
+  /* Ảnh chụp trước lần xáo trộn gần nhất. Xáo trộn là thao tác một-phát-mất-hết
+     (100 màn về thứ tự ngẫu nhiên, không đoán lại được thứ tự cũ), nên phải có
+     đường lui — chỉ giữ MỘT bậc, đủ để cứu cú bấm nhầm. */
+  let shuffleUndo = null;
+
+  function shuffleBranch() {
+    const list = branches[activeBranch];
+    if (list.length < 2) { showSavedBanner('Nhánh này chưa đủ màn để xáo trộn.'); return; }
+    /* Chụp CHÍNH các đối tượng màn theo thứ tự cũ, không chụp id: xáo trộn sẽ
+       đánh số lại nên id cũ không còn trỏ đúng ai nữa. */
+    shuffleUndo = {
+      branch: activeBranch,
+      objects: list.slice(),
+      solved: list.map((l) => !!progress[activeBranch + ':' + l.id])
+    };
+    const solved = list.map((l) => !!progress[activeBranch + ':' + l.id]);
+    // Fisher-Yates, hoán vị màn và cờ đã-giải SONG SONG
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tl = list[i]; list[i] = list[j]; list[j] = tl;
+      const ts = solved[i]; solved[i] = solved[j]; solved[j] = ts;
+    }
+    resequenceBranch(list, activeBranch, solved);
+    currentLevelIdx = 0;
+    renderLevelList();
+    renderProgressStrip();
+    openLevel(0);
+    saveDraft();
+    showSavedBanner(`🔀 Đã xáo trộn ${list.length} màn của ${BRANCHES[activeBranch].emoji} ${BRANCHES[activeBranch].name}.`);
+  }
+
+  function undoShuffle() {
+    if (!shuffleUndo) return;
+    const key = shuffleUndo.branch;
+    const list = branches[key];
+    /* Ảnh chụp lưu THỨ TỰ CŨ theo id, mà xáo trộn đã đánh số lại — nên phải
+       dựng lại bằng cách đặt từng màn về đúng chỗ nó đứng lúc chụp. */
+    if (!shuffleUndo.objects || shuffleUndo.objects.length !== list.length) {
+      showSavedBanner('Không hoàn tác được: danh sách đã thay đổi kể từ lần xáo trộn.');
+      shuffleUndo = null; renderBranchTools(); return;
+    }
+    branches[key] = shuffleUndo.objects.slice();
+    if (activeBranch === key) workingLevels = branches[key];
+    resequenceBranch(branches[key], key, shuffleUndo.solved);
+    shuffleUndo = null;
+    currentLevelIdx = 0;
+    renderLevelList();
+    renderProgressStrip();
+    openLevel(0);
+    saveDraft();
+    showSavedBanner('↩︎ Đã trả lại thứ tự trước khi xáo trộn.');
   }
 
   function renderChapterCounts() {
@@ -26857,6 +26965,8 @@ const LEVELS = [
        với màn đã có thì bỏ, và báo rõ bỏ những màn nào. */
     let added = 0, replaced = 0;
     const skipped = [];
+    // cờ "đã giải" của nhánh đích, chụp TRƯỚC khi thêm/ghi đè
+    const solvedBefore = branches[targetBranch].map((l) => !!progress[targetBranch + ':' + l.id]);
     arr.forEach((lvl) => {
       lvl.id = String(lvl.id);
       lvl.heartsStart = lvl.heartsStart || 3;
@@ -26875,6 +26985,14 @@ const LEVELS = [
       if (existingIdx >= 0) { list[existingIdx] = lvl; replaced++; }
       else { list.push(lvl); added++; }
     });
+    /* ĐÁNH SỐ LẠI sau khi nhập, giữ đúng giao ước "id = vị trí trong nhánh".
+       Không làm bước này thì một màn nhập vào mang id 777 sẽ nằm ở vị trí 101
+       mà vẫn hiện "L777" — đúng cái lệch mà thao tác kéo đổi chỗ vừa sửa xong.
+       Khớp-theo-id để ghi đè vẫn chạy TRƯỚC, nên "nhập màn id 5" vẫn có nghĩa
+       là "thay màn thứ 5", đúng như trước. */
+    const solvedAfter = branches[targetBranch].map((l, i) =>
+      i < solvedBefore.length ? solvedBefore[i] : false);
+    resequenceBranch(branches[targetBranch], targetBranch, solvedAfter);
     $('importModal').classList.remove('active');
     $('importTextarea').value = '';
     if (targetBranch !== activeBranch) setBranch(targetBranch);
