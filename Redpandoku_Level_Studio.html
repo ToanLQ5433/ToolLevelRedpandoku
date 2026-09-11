@@ -561,6 +561,7 @@ progress{width:220px;height:10px}
           <div class="sub-tab active" id="spTabAxis">🎨 Sinh nhiều màn → tích chọn</div>
           <div class="sub-tab" id="spTabSeries">📅 Sinh chuỗi ngày</div>
           <div class="sub-tab" id="spTabPartial">✏️ Tô vài dải, tool làm nốt</div>
+          <div class="sub-tab" id="spTabText">🔤 Viết chữ lên bàn</div>
         </div>
 
         <!-- 1. sinh cả mẻ rồi tích chọn -->
@@ -615,6 +616,24 @@ progress{width:220px;height:10px}
         </div>
 
         <!-- 3. tô vài dải rồi tool làm nốt -->
+        <!-- 4. gõ chữ -> tool vẽ chữ đó bằng biên các vùng -->
+        <div id="spPanelText" class="sec-off">
+          <p class="hint" style="margin-bottom:10px">Gõ chữ, tool dựng một màn mà <b>biên các vùng vẽ ra đúng chữ đó</b> — vẫn đúng 1 nghiệm và giải được bằng logic thuần. Trong game không có viền đen, nên phần chữ được tô <b>màu ấm</b> còn nền tô <b>màu lạnh</b> để chữ nổi lên.</p>
+          <div class="row" style="gap:8px;align-items:flex-end;margin-bottom:8px">
+            <div class="f wide"><label for="spTextInput">Chữ muốn hiện</label>
+              <input id="spTextInput" type="text" maxlength="4" placeholder="VD: HI, GO, A, 8" style="text-transform:uppercase;font-weight:800;letter-spacing:2px"></div>
+            <div class="f"><label for="spTextSize">Cỡ bàn</label>
+              <select id="spTextSize"><option>6</option><option>7</option><option>8</option><option>9</option><option selected>10</option></select></div>
+            <button class="primary sm" id="spTextGo">🔤 Dựng màn</button>
+          </div>
+          <div id="spTextPlan" class="hint" style="margin-bottom:8px"></div>
+          <div id="spTextStatus" style="margin-bottom:8px"></div>
+          <div id="spTextPreview"></div>
+          <div class="row" style="gap:6px;margin-top:8px">
+            <button class="ghost sm" id="spTextAdd" disabled>➕ Thêm vào Thử Thách Ngày</button>
+          </div>
+        </div>
+
         <div id="spPanelPartial" class="sec-off">
           <p class="hint" style="margin-bottom:8px">Tô <b>1–3 dải màu</b> theo ý anh rồi bấm hoàn thành. Tool điền nốt các vùng còn lại và <b>giữ nguyên hình anh vẽ</b> — không đổi ô nào, cũng không cho vùng anh vẽ nở ra. Lưu ý: ô chỉ chạm nhau ở <b>góc</b> thì không tính là liền, dải chéo phải tô kiểu bậc thang.</p>
           <div class="row" style="align-items:flex-end;margin-bottom:8px">
@@ -4419,6 +4438,127 @@ progress{width:220px;height:10px}
     }
   };
 
+  /* ======================================================================
+     1b. FONT CHỮ — gõ chữ, tool vẽ chữ đó bằng biên các vùng.
+
+     Ba điều đo được quyết định hình dáng font này, không phải thẩm mỹ:
+
+     (1) MỖI NÉT PHẢI LIỀN NHAU THEO 4 HƯỚNG. Nét nối chéo thì mảnh đó rời ra,
+         mà mỗi mảnh rời cần tối thiểu một vùng, và vùng nào cũng phải có một
+         con gấu. Chữ X vẽ kiểu chéo cổ điển ('#.#/#.#/.#./#.#/#.#') tách
+         thành 5 mảnh -> đo được là không bao giờ đặt nổi gấu. Đổi sang
+         '#.#/###/.#./###/#.#' (hai nét gặp nhau qua hàng đặc) thì còn 1 mảnh
+         và sinh được ngay.
+
+     (2) KHÔNG ĐƯỢC CÓ HAI LỖ KÍN NẰM CÙNG MỘT CỘT. Lỗ kín là một mảnh nền
+         riêng, nên nó cần một vùng riêng, nên nó phải chứa đúng một con gấu.
+         Hai lỗ cùng cột = đòi hai con gấu trong một cột = bất khả. Đây là lý
+         do chữ B và số 8 vẽ kiểu hai bụng kín KHÔNG BAO GIỜ sinh được, dù thử
+         bao nhiêu hạt giống. Cả hai ở đây đều mở một bên sườn cho lỗ dưới
+         thông ra nền.
+
+     (3) 3 Ô NGANG LÀ TỐI THIỂU ĐỌC ĐƯỢC, vài chữ cần 4. Bàn lớn nhất là 10×10
+         nên ghép được nhiều nhất 2 ký tự (3+1+3=7, hoặc 4+1+4=9). Ba ký tự
+         cần 11 ô — không có cửa, và tool nói thẳng điều đó thay vì sinh ra
+         một mớ không đọc nổi.
+     ====================================================================== */
+  const TEXT_GLYPHS = {
+    A: ['###', '#.#', '###', '#.#', '#.#'],
+    // B: bụng dưới mở sang trái, nếu kín cả hai thì hai lỗ cùng cột -> bất khả
+    B: ['####', '#..#', '####', '#...', '####'],
+    C: ['###', '#..', '#..', '#..', '###'],
+    D: ['##.', '#.#', '#.#', '#.#', '##.'],
+    E: ['###', '#..', '##.', '#..', '###'],
+    F: ['###', '#..', '##.', '#..', '#..'],
+    G: ['###', '#..', '#.#', '#.#', '###'],
+    H: ['#.#', '#.#', '###', '#.#', '#.#'],
+    I: ['###', '.#.', '.#.', '.#.', '###'],
+    J: ['..#', '..#', '..#', '#.#', '###'],
+    // K: hai tay gặp thân qua hàng đặc, nếu không thì tay rời khỏi thân
+    K: ['#.#', '###', '#..', '###', '#.#'],
+    L: ['#..', '#..', '#..', '#..', '###'],
+    M: ['#.#', '###', '###', '#.#', '#.#'],
+    N: ['#.#', '###', '###', '###', '#.#'],
+    O: ['###', '#.#', '#.#', '#.#', '###'],
+    P: ['###', '#.#', '###', '#..', '#..'],
+    Q: ['###', '#.#', '#.#', '###', '..#'],
+    R: ['###', '#.#', '##.', '#.#', '#.#'],
+    S: ['###', '#..', '###', '..#', '###'],
+    T: ['###', '.#.', '.#.', '.#.', '.#.'],
+    U: ['#.#', '#.#', '#.#', '#.#', '###'],
+    V: ['#.#', '#.#', '#.#', '#.#', '.#.'],
+    W: ['#.#', '#.#', '###', '###', '#.#'],
+    X: ['#.#', '###', '.#.', '###', '#.#'],
+    Y: ['#.#', '#.#', '.#.', '.#.', '.#.'],
+    Z: ['###', '..#', '.#.', '#..', '###'],
+    '0': ['###', '#.#', '#.#', '#.#', '###'],
+    '1': ['.#.', '##.', '.#.', '.#.', '###'],
+    '2': ['###', '..#', '###', '#..', '###'],
+    '3': ['###', '..#', '###', '..#', '###'],
+    '4': ['#.#', '#.#', '###', '..#', '..#'],
+    '5': ['###', '#..', '###', '..#', '###'],
+    '6': ['###', '#..', '###', '#.#', '###'],
+    '7': ['###', '..#', '..#', '..#', '..#'],
+    // 8: cùng lý do với B — sườn trái giữa mở ra để lỗ dưới thông xuống nền
+    '8': ['###', '#.#', '#..', '#.#', '###'],
+    '9': ['###', '#.#', '###', '..#', '###'],
+    '+': ['...', '.#.', '###', '.#.', '...'],
+    '-': ['...', '...', '###', '...', '...'],
+    '!': ['.#.', '.#.', '.#.', '...', '.#.'],
+    '?': ['###', '..#', '.##', '...', '.#.']
+  };
+  const GLYPH_H = 5;
+
+  function textSupported(ch) { return !!TEXT_GLYPHS[String(ch).toUpperCase()]; }
+
+  /* Chữ nào vẽ được, chữ nào bị bỏ, và có vừa bàn không — trả lời TRƯỚC khi
+     sinh, để giao diện nói được lý do thay vì chỉ báo "không sinh được". */
+  function textPlan(text, N, gap) {
+    gap = gap == null ? 1 : gap;
+    const raw = String(text || '').toUpperCase().split('');
+    const used = [], dropped = [];
+    raw.forEach((ch) => {
+      if (ch === ' ') return;
+      if (TEXT_GLYPHS[ch]) used.push(ch); else if (ch.trim()) dropped.push(ch);
+    });
+    if (!used.length) return { ok: false, reason: 'chưa gõ ký tự nào vẽ được', used: used, dropped: dropped };
+    const width = used.reduce((a, ch) => a + TEXT_GLYPHS[ch][0].length, 0) + (used.length - 1) * gap;
+    if (width > N || GLYPH_H > N) {
+      return {
+        ok: false, used: used, dropped: dropped, width: width,
+        reason: `"${used.join('')}" cần ${width}×${GLYPH_H} ô mà bàn chỉ có ${N}×${N}` +
+          (used.length > 2 ? ' — bàn 10×10 chỉ vẽ được nhiều nhất 2 ký tự' : '')
+      };
+    }
+    return { ok: true, used: used, dropped: dropped, width: width, height: GLYPH_H, gap: gap };
+  }
+
+  // Dựng mặt nạ N×N từ chữ, căn giữa bàn.
+  function textMask(text, N, opts) {
+    opts = opts || {};
+    const plan = textPlan(text, N, opts.gap);
+    if (!plan.ok) return null;
+    const rows = [];
+    for (let r = 0; r < GLYPH_H; r++) {
+      let line = '';
+      plan.used.forEach((ch, i) => {
+        if (i) line += '.'.repeat(plan.gap);
+        line += TEXT_GLYPHS[ch][r];
+      });
+      rows.push(line);
+    }
+    const padL = Math.floor((N - plan.width) / 2);
+    const padT = opts.top != null ? opts.top : Math.floor((N - GLYPH_H) / 2);
+    const mask = new Array(N * N).fill(0);
+    for (let r = 0; r < N; r++) {
+      for (let c = 0; c < N; c++) {
+        const gr = r - padT, gc = c - padL;
+        if (gr >= 0 && gr < GLYPH_H && gc >= 0 && gc < plan.width && rows[gr][gc] === '#') mask[r * N + c] = 1;
+      }
+    }
+    return mask;
+  }
+
   function shapeList() {
     return Object.keys(SHAPES).map((k) => ({
       key: k, name: SHAPES[k].name, emoji: SHAPES[k].emoji
@@ -5100,6 +5240,7 @@ progress{width:220px;height:10px}
     SHAPES: SHAPES, shapeList: shapeList, maskOf: maskOf,
     recolorByMask: recolorByMask, BOLD_SLOTS: BOLD_SLOTS, PALE_SLOTS: PALE_SLOTS,
     maskFromArt: maskFromArt, resizeMask: resizeMask,
+    TEXT_GLYPHS: TEXT_GLYPHS, textMask: textMask, textPlan: textPlan, textSupported: textSupported,
     components: components, checkMask: checkMask,
     generatePictureLevel: generatePictureLevel,
     feasible: feasible, diagnoseMask: diagnoseMask,
@@ -5829,10 +5970,21 @@ progress{width:220px;height:10px}
     const rng = cfg.rng || Brain.makeRng((Math.random() * 1e9) | 0);
     if (!src) return { ok: false, reason: 'thiếu nguồn' };
     let r;
-    if (src.kind === 'shape') {
+    if (src.kind === 'shape' || src.kind === 'text') {
       if (!Pic) return { ok: false, reason: 'không có bộ sinh hình' };
-      const mask = Pic.maskOf(src.key, N);
-      if (!mask) return { ok: false, reason: 'không có hình ' + src.key };
+      /* Chữ đi chung đường với hình vẽ: cả hai chỉ là một MẶT NẠ. Nhờ vậy khâu
+         nới hình khi bí, khâu đổi màu cho hình hiện ra trong game, và khâu
+         chấm điểm đều dùng lại nguyên vẹn — không có nhánh code thứ hai để
+         lệch nhau về sau. */
+      let mask;
+      if (src.kind === 'text') {
+        const plan = Pic.textPlan(src.text, N);
+        if (!plan.ok) return { ok: false, reason: plan.reason, textPlan: plan };
+        mask = Pic.textMask(src.text, N);
+      } else {
+        mask = Pic.maskOf(src.key, N);
+      }
+      if (!mask) return { ok: false, reason: 'không dựng được mặt nạ' };
       r = Pic.generatePicture({
         N: N, mask: mask, rng: rng,
         attempts: cfg.attempts || 60,
@@ -5851,7 +6003,7 @@ progress{width:220px;height:10px}
     // Hình phải HIỆN RA TRONG GAME, nơi không có viền đen nào: đổi nhãn vùng
     // để trong hình toàn màu ấm, nền toàn màu lạnh. Chỉ đổi tên vùng nên cấu
     // trúc, lời giải và độ khó không đổi — vẫn tính lại để chắc chắn.
-    if (src.kind === 'shape' && cfg.recolor !== false && Pic.recolorByMask) {
+    if ((src.kind === 'shape' || src.kind === 'text') && cfg.recolor !== false && Pic.recolorByMask) {
       const re = Pic.recolorByMask(N, r.regionGrid, r.mask);
       if (re) {
         r.regionGrid = re;
@@ -27930,6 +28082,7 @@ const LEVELS = [
   const Sp = window.RedpandokuSpecial;
   const Aes = window.RedpandokuAesthetics;
   const Brain = window.RedpandokuBrain;
+  const Pic = window.RedpandokuPicture;      // font chữ + mặt nạ hình
   if (!Sp || !Aes || !Brain) return;
   const $ = (id) => document.getElementById(id);
   const PAL = window.REDPANDOKU_PALETTE || [];
@@ -28457,9 +28610,88 @@ const LEVELS = [
     }, 20);
   }
 
+  /* ======================================================================
+     TAB VIẾT CHỮ — gõ chữ, tool dựng màn mà biên các vùng vẽ ra chữ đó.
+
+     Nói trước khi bấm, không để người dùng bấm rồi mới biết hỏng: ô nhập vừa
+     gõ là đã báo chữ nào vẽ được, chữ nào bị bỏ, cần rộng bao nhiêu ô và bàn
+     hiện tại có chứa nổi không. Bấm "Dựng màn" mà vẫn trượt thì đó là chuyện
+     khác — bố cục chữ đó không khoá về 1 nghiệm được — và câu báo nói đúng
+     chuyện đó, kèm gợi ý đổi cỡ bàn.
+     ====================================================================== */
+  let lastText = null, lastTextStr = '';
+
+  function describeText() {
+    const el = $('spTextPlan');
+    if (!el) return;
+    const txt = ($('spTextInput').value || '').toUpperCase();
+    $('spTextInput').value = txt;
+    const N = parseInt($('spTextSize').value, 10) || 10;
+    if (!txt.trim()) {
+      el.innerHTML = 'Gõ 1–2 ký tự (A–Z, 0–9, + - ! ?). Bàn 10×10 chứa được nhiều nhất <b>2 ký tự</b>; ' +
+        'một ký tự thì vẽ được từ bàn 6×6 trở lên.';
+      return;
+    }
+    const plan = Pic.textPlan(txt, N);
+    const dropNote = plan.dropped && plan.dropped.length
+      ? ' · <span style="color:#b45309">bỏ qua ký tự không vẽ được: <b>' + plan.dropped.join(' ') + '</b></span>'
+      : '';
+    if (!plan.ok) {
+      el.innerHTML = '<span style="color:#b91c1c">✘ ' + plan.reason + '</span>' + dropNote;
+      return;
+    }
+    el.innerHTML = '✔ Sẽ vẽ <b>' + plan.used.join('') + '</b> — chiếm ' + plan.width + '×' + plan.height +
+      ' ô giữa bàn ' + N + '×' + N + dropNote;
+  }
+
+  function genText() {
+    const txt = ($('spTextInput').value || '').toUpperCase().trim();
+    const N = parseInt($('spTextSize').value, 10) || 10;
+    const plan = Pic.textPlan(txt, N);
+    if (!plan.ok) { status('spTextStatus', 'info', '<b style="color:#b91c1c">✗ ' + plan.reason + '</b>'); return; }
+    const btn = $('spTextGo');
+    btn.disabled = true;
+    status('spTextStatus', 'info', '⏳ Đang dựng màn cho chữ <b>' + plan.used.join('') + '</b>...');
+    lastText = null; $('spTextAdd').disabled = true; $('spTextPreview').innerHTML = '';
+    setTimeout(() => {
+      const t0 = Date.now();
+      /* Thử nhiều hạt giống: cùng một chữ, hạt khác nhau cho bố cục vùng khác
+         nhau, và có bố cục khoá được về 1 nghiệm có bố cục không. Đo được là
+         vài chữ chỉ ra ở lượt thứ ba, nên thử một lượt rồi báo hỏng là oan. */
+      let r = null;
+      for (let k = 0; k < 6 && !r; k++) {
+        const got = Sp.generateFrom({
+          source: { kind: 'text', text: txt }, N: N,
+          rng: Brain.makeRng(((Math.random() * 1e9) | 0) ^ (k * 7919)),
+          timeBudgetMs: 4000, maxDrift: 2
+        });
+        if (got.ok) r = got;
+      }
+      btn.disabled = false;
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      if (!r) {
+        status('spTextStatus', 'info',
+          '<b style="color:#b91c1c">✗ Chữ "' + plan.used.join('') + '" không khoá được về 1 nghiệm trên bàn ' + N + '×' + N + '.</b>' +
+          '<br><span class="hint">Nét chữ chia bàn thành quá nhiều mảnh rời, mà mỗi mảnh cần một vùng riêng. ' +
+          'Thử đổi cỡ bàn, bỏ bớt một ký tự, hoặc đổi sang chữ có nét liền hơn. (' + secs + 's)</span>');
+        return;
+      }
+      lastText = r; lastTextStr = plan.used.join('');
+      $('spTextAdd').disabled = false;
+      status('spTextStatus', 'ok',
+        '<b>✓ ' + secs + 's.</b> Chữ <b>' + lastTextStr + '</b> · ' + r.score.starsText + ' <b>' +
+        r.score.stars + '/5 sao</b> · giải khoảng <b>' + r.score.timeMaster + '</b> · ' + r.score.band);
+      // truyền `mask` để bàn xem trước vẽ luôn viền chữ, còn `regionColors`
+      // để thấy đúng bộ màu ấm/lạnh mà người chơi sẽ thấy trong game
+      $('spTextPreview').innerHTML =
+        boardHtml(r.N, r.regionGrid, r.solution, null, r.mask || null, r.regionColors);
+    }, 20);
+  }
+
   /* ================= khởi tạo ============================================ */
   function showSub(which) {
-    [['spTabAxis', 'spPanelAxis'], ['spTabSeries', 'spPanelSeries'], ['spTabPartial', 'spPanelPartial']]
+    [['spTabAxis', 'spPanelAxis'], ['spTabSeries', 'spPanelSeries'],
+     ['spTabPartial', 'spPanelPartial'], ['spTabText', 'spPanelText']]
       .forEach(([t, p]) => {
         $(t).classList.toggle('active', t === which);
         $(p).classList.toggle('sec-off', t !== which);
@@ -28475,6 +28707,20 @@ const LEVELS = [
     $('spTabAxis').onclick = () => showSub('spTabAxis');
     $('spTabSeries').onclick = () => showSub('spTabSeries');
     $('spTabPartial').onclick = () => showSub('spTabPartial');
+    $('spTabText').onclick = () => showSub('spTabText');
+    // không có bộ sinh hình thì ẩn hẳn tab chữ, đừng để nút bấm vào rồi lỗi
+    if (!Pic || !Pic.textPlan) { $('spTabText').classList.add('sec-off'); }
+    else if ($('spTextGo')) {
+      $('spTextGo').onclick = genText;
+      $('spTextInput').oninput = describeText;
+      $('spTextSize').onchange = describeText;
+      $('spTextAdd').onclick = () => {
+        if (!lastText || !window.__redpandokuAddDaily) return;
+        window.__redpandokuAddDaily(levelJson(lastText, { text: lastTextStr }));
+        status('spTextStatus', 'ok', '➕ Đã thêm <b>' + lastTextStr + '</b> vào nhánh <b>📅 Thử Thách Ngày</b>.');
+      };
+      describeText();
+    }
     $('spGen').onclick = genBatch;
     $('spSize').onchange = describeSources;
     $('spSrcAllShapes').onclick = () => {
