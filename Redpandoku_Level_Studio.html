@@ -1589,8 +1589,25 @@ progress{width:220px;height:10px}
         DFS over rows; state = (used columns, previous column, used regions).
         Stops early at `cap` solutions.
      ====================================================================== */
-  function countSolutions(N, regionGrid, cap) {
+  /* `givens` = mảng ô ĐÃ ĐẶT SẴN gấu trúc trên bàn (kiểu Meowdoku: vài con
+     được phát không cho người chơi ngay từ đầu). Đây là RÀNG BUỘC, không phải
+     gợi ý: hàng nào đã có gấu sẵn thì chỉ còn đúng cột đó để xét. */
+  function givenColsOf(N, givens) {
+    if (!givens || !givens.length) return null;
+    const byRow = new Array(N).fill(-1);
+    for (const cell of givens) {
+      const r = Math.floor(cell / N), c = cell % N;
+      if (r < 0 || r >= N || c < 0 || c >= N) continue;
+      if (byRow[r] >= 0 && byRow[r] !== c) return 'conflict';
+      byRow[r] = c;
+    }
+    return byRow;
+  }
+
+  function countSolutions(N, regionGrid, cap, givens) {
     cap = cap || 2;
+    const fixed = givenColsOf(N, givens);
+    if (fixed === 'conflict') return { count: 0, solutions: [] };
     let found = 0;
     const firstSol = [];
     const allSols = [];
@@ -1607,6 +1624,7 @@ progress{width:220px;height:10px}
       const remainingRows = N - row;
       if (popcount(~usedRegs & ((1 << N) - 1)) > remainingRows) return;
       for (let c = 0; c < N; c++) {
+        if (fixed && fixed[row] >= 0 && c !== fixed[row]) continue;
         if (usedCols & (1 << c)) continue;
         if (prevCol >= 0 && Math.abs(c - prevCol) <= 1) continue;
         const reg = regionGrid[row * N + c];
@@ -1981,11 +1999,25 @@ progress{width:220px;height:10px}
     return false;
   }
 
-  function analyze(N, regionGrid) {
+  function analyze(N, regionGrid, givens) {
     const s = newState(N);
     // `hunt` bật chế độ đo tải ứng viên trong propagate; các lời gọi propagate
     // lồng bên trong T6 dùng stats riêng KHÔNG có trường này nên không nhiễu.
     const stats = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, t6Trials: 0, hunt: 0 };
+    /* Gấu ĐẶT SẴN được đưa vào thế cờ TRƯỚC khi đo, và KHÔNG tính là nước suy
+       luận — người chơi được phát không, không phải tự nghĩ ra. Nhờ vậy thời
+       gian giải đo được phản ánh đúng: cùng một bố cục vùng, thêm gấu sẵn thì
+       màn phải nhẹ đi. */
+    if (givens && givens.length) {
+      const seenRow = {};
+      for (const cell of givens) {
+        const r = Math.floor(cell / N), c = cell % N;
+        if (r < 0 || r >= N || c < 0 || c >= N) continue;
+        if (seenRow[r] != null) continue;
+        seenRow[r] = c;
+        placePanda(N, regionGrid, s, r, c, null);
+      }
+    }
     let needsSearch = false;
     for (;;) {
       const res = propagate(N, regionGrid, s, stats);
@@ -3816,7 +3848,9 @@ progress{width:220px;height:10px}
     ['I12', 'số vùng 1-ô <= mức tối đa đã hoạch định'],
     ['I13', 'vùng lớn nhất <= maxRegionRatio * N'],
     ['I14', 'không trùng lặp qua 8 phép đối xứng + đổi tên vùng'],
-    ['I15', 'số vùng <= số màu trong bảng màu']
+    ['I15', 'số vùng <= số màu trong bảng màu'],
+    ['I16', 'gấu đặt sẵn hợp luật (không cùng hàng/cột/vùng, không chạm nhau)'],
+    ['I17', 'gấu đặt sẵn nằm đúng trong nghiệm của màn']
   ];
 
   function validateLevel(level, opts) {
@@ -3846,13 +3880,47 @@ progress{width:220px;height:10px}
       for (let r = 0; r + 1 < N; r++) if (Math.abs(sol[r] - sol[r + 1]) <= 1) add('I08', 'hàng ' + r + '/' + (r + 1));
     }
 
-    const res = countSolutions(N, grid, 3);
-    if (res.count !== 1) add('I09', 'đếm được ' + res.count);
+    /* GẤU ĐẶT SẴN là một phần của đề bài, nên phải kiểm trước khi đếm nghiệm:
+       một con đặt sai chỗ biến màn thành vô nghiệm, mà thông báo "0 nghiệm"
+       thì không nói cho người thiết kế biết lỗi nằm ở con gấu nào. */
+    const givens = Array.isArray(level.givens) ? level.givens : [];
+    if (givens.length) {
+      const rows = {}, cols = {}, regs = {};
+      let bad = null;
+      for (const cell of givens) {
+        if (!(Number.isInteger(cell) && cell >= 0 && cell < N * N)) { bad = 'ô ' + cell + ' ngoài bàn'; break; }
+        const r = Math.floor(cell / N), c = cell % N, reg = grid[cell];
+        if (rows[r]) { bad = 'hai con cùng hàng ' + (r + 1); break; }
+        if (cols[c]) { bad = 'hai con cùng cột ' + (c + 1); break; }
+        if (regs[reg]) { bad = 'hai con cùng vùng ' + reg; break; }
+        rows[r] = cols[c] = regs[reg] = 1;
+      }
+      if (!bad) {
+        for (let a = 0; a < givens.length && !bad; a++) {
+          for (let b = a + 1; b < givens.length && !bad; b++) {
+            const ra = Math.floor(givens[a] / N), ca = givens[a] % N;
+            const rb = Math.floor(givens[b] / N), cb = givens[b] % N;
+            if (Math.abs(ra - rb) <= 1 && Math.abs(ca - cb) <= 1) bad = 'hai con chạm nhau';
+          }
+        }
+      }
+      if (givens.length > N) bad = givens.length + ' con trên bàn ' + N + ' hàng';
+      if (bad) add('I16', bad);
+      if (Array.isArray(sol)) {
+        const solSet = {};
+        for (let r = 0; r < N; r++) solSet[r * N + sol[r]] = 1;
+        const stray = givens.filter((cell) => !solSet[cell]);
+        if (stray.length) add('I17', 'ô ' + stray.join(', ') + ' không thuộc nghiệm');
+      }
+    }
+
+    const res = countSolutions(N, grid, 3, givens);
+    if (res.count !== 1) add('I09', 'đếm được ' + res.count + (givens.length ? ' (đã tính gấu đặt sẵn)' : ''));
     else if (Array.isArray(sol)) {
       const s0 = res.solutions[0];
       for (let r = 0; r < N; r++) if (s0[r] !== sol[r]) { add('I11', 'khác ở hàng ' + r); break; }
     }
-    const profile = analyze(N, grid);
+    const profile = analyze(N, grid, givens);
     if (profile.needsSearch) add('I10', 'cần đoán (T7)');
 
     const st = structure(N, grid);
@@ -25196,6 +25264,7 @@ const LEVELS = [
     grid.style.gridTemplateRows = `repeat(${N}, ${CELL_PX}px)`;
 
     const solSet = new Set(solutionFlatOf(level));
+    const givenSet = (level.givens && level.givens.length) ? new Set(level.givens) : null;
 
     for (let r = 0; r < N; r++) {
       for (let c = 0; c < N; c++) {
@@ -25218,10 +25287,20 @@ const LEVELS = [
         }
         div.dataset.cell = cell;
 
+        /* Gấu ĐẶT SẴN vẽ khác gấu người chơi đặt: viền nâu đậm quanh ô, để
+           nhìn là biết ngay "con này được cho, không gỡ được". Không phân biệt
+           thì người chơi bấm mãi không hiểu sao ô đó không chịu nhả. */
+        const isGiven = givenSet && givenSet.has(cell);
         if (playerState) {
           const st = playerState[cell];
           if (st === 2) div.textContent = '🐼';
           else if (st === 1) div.innerHTML = '<span class="mark-x">✕</span>';
+        } else if (isGiven) {
+          div.textContent = '🐼';
+        }
+        if (isGiven) {
+          div.style.boxShadow = 'inset 0 0 0 3px #c0682f';
+          div.title = 'Gấu có sẵn — không gỡ được';
         }
         if (opts.showSolution && solSet.has(cell)) {
           div.style.boxShadow = 'inset 0 0 0 3px #16a34a';
@@ -25243,9 +25322,15 @@ const LEVELS = [
   // Play logic
   // ------------------------------------------------------------------------
   function newPlayState(level) {
+    const st = new Int8Array(level.size * level.size);
+    // gấu đặt sẵn có mặt ngay từ nước đầu tiên
+    if (level.givens) for (const cell of level.givens) {
+      if (cell >= 0 && cell < st.length) st[cell] = 2;
+    }
     return {
       N: level.size,
-      state: new Int8Array(level.size * level.size),
+      state: st,
+      givenSet: new Set(level.givens || []),
       hearts: level.heartsStart || 3,
       // Đây là TOOL TÁC GIẢ, không phải bản game bán ra: trợ lực dùng không
       // giới hạn để người thiết kế thử map thoải mái. Kinh tế GML/giới hạn lượt
@@ -25456,6 +25541,10 @@ const LEVELS = [
 
   function onPlayCellClick(level, cell) {
     if (play.solved) return;
+    /* Ô có gấu ĐẶT SẴN là một phần của ĐỀ BÀI, không phải nước đi — gạch ✕ hay
+       gỡ nó ra đều vô nghĩa. Chặn ngay từ đây, trước cả bộ đếm chạm-đúp, để
+       một cú bấm nhầm không bị tính thành nước đi sai rồi trừ tim. */
+    if (play.givenSet && play.givenSet.has(cell)) return;
     // Khoá thao tác trong lúc hướng dẫn: chỉ ô đang dạy nhận chạm, để người
     // mới không phá mất tình huống đang được giải thích và không bị trừ tim
     // vì một mẹo họ chưa được học.
@@ -25950,6 +26039,7 @@ const LEVELS = [
       // tô từ đầu; muốn có sẵn khung thì bấm "Chia vùng tự động"
       regionGrid: new Array(N * N).fill(-1),
       solution: new Array(N).fill(-1),
+      givens: [],                       // ô có gấu trúc đặt sẵn (kiểu Meowdoku)
       name: 'Map tự thiết kế', heartsStart: 3, solver: { verifiedUnique: false }
     };
   }
@@ -25991,6 +26081,16 @@ const LEVELS = [
 
   function designerPaint(cell) {
     const N = designerLevel.size;
+    if (designerBrush.type === 'panda') {
+      designerLevel.givens = designerLevel.givens || [];
+      const at = designerLevel.givens.indexOf(cell);
+      if (at >= 0) designerLevel.givens.splice(at, 1);
+      else designerLevel.givens.push(cell);
+      designerLevel.givens.sort((a, b) => a - b);
+      renderBrushBar(N);
+      redrawDesigner();
+      return;
+    }
     const targets = symmetryPartners(cell, N);
     if (designerTool === 'fill') {
       for (const t of targets) floodFill(t, designerBrush.region);
@@ -26043,13 +26143,40 @@ const LEVELS = [
     for (let i = 0; i < PALETTE.length; i++) {
       const n = counts[i] || 0;
       const btn = document.createElement('div');
-      btn.className = 'brush-btn' + (designerBrush.region === i ? ' active' : '');
+      btn.className = 'brush-btn' + (designerBrush.type === 'region' && designerBrush.region === i ? ' active' : '');
       btn.style.background = PALETTE[i].hex;
       if (!n) btn.style.opacity = '0.55';
       btn.textContent = PALETTE[i].name + (n ? ' · ' + n : '');
       btn.title = 'Tô ' + PALETTE[i].name + (n ? ' (' + n + ' ô)' : ' (chưa dùng)');
       btn.onclick = () => { designerBrush = { type: 'region', region: i }; renderBrushBar(N); };
       bar.appendChild(btn);
+    }
+
+    /* CỌ GẤU ĐẶT SẴN — kiểu Meowdoku.
+
+       Vài con gấu được phát không ngay từ đầu, như số cho sẵn trong Sudoku.
+       Đây KHÔNG phải gợi ý mà là một phần đề bài: chúng khoá hàng/cột/vùng của
+       mình lại, nên cùng một bố cục vùng, thêm gấu sẵn là màn nhẹ hẳn đi —
+       và bộ chấm độ khó ở đây đo đúng điều đó chứ không đoán.
+
+       Chỉ có ở tab Tự Thiết Kế. Bộ sinh tự động không dùng, vì đặt gấu sẵn là
+       một quyết định thiết kế của con người: đặt ở đâu thì mở ra lối giải nào. */
+    const givens = designerLevel && designerLevel.givens ? designerLevel.givens : [];
+    const pandaBtn = document.createElement('div');
+    pandaBtn.className = 'brush-btn' + (designerBrush.type === 'panda' ? ' active' : '');
+    pandaBtn.style.cssText = 'background:#fff7ed;border:2px solid #c0682f;color:#7c2d12;font-weight:800';
+    pandaBtn.textContent = '🐼 Gấu sẵn' + (givens.length ? ' · ' + givens.length : '');
+    pandaBtn.title = 'Đặt gấu trúc có sẵn trên bàn. Bấm ô để đặt, bấm lại để gỡ.';
+    pandaBtn.onclick = () => { designerBrush = { type: 'panda' }; renderBrushBar(N); };
+    bar.appendChild(pandaBtn);
+
+    if (givens.length) {
+      const clr = document.createElement('div');
+      clr.className = 'brush-btn';
+      clr.style.cssText = 'background:#fff;border:1px dashed #94a3b8;color:#475569';
+      clr.textContent = '✕ Gỡ hết gấu';
+      clr.onclick = () => { designerLevel.givens = []; renderBrushBar(N); redrawDesigner(); };
+      bar.appendChild(clr);
     }
   }
 
@@ -26128,16 +26255,56 @@ const LEVELS = [
       }
     }
 
+    /* GẤU ĐẶT SẴN — kiểm riêng, vì sai ở đây làm màn KHÔNG GIẢI ĐƯỢC chứ
+       không chỉ xấu. Ba kiểu sai, và phải nói rõ là kiểu nào:
+         · hai con tự đá nhau (cùng hàng/cột/vùng, hoặc kề nhau)
+         · đặt vào ô không thuộc nghiệm -> bàn thành vô nghiệm
+       Bàn vẫn phải có đúng 1 nghiệm KHI ĐÃ TÍNH gấu sẵn. */
+    const givens = (designerLevel.givens || []).slice();
+    if (givens.length) {
+      const gr = [], gc = [], greg = [];
+      let clash = null;
+      for (const cell of givens) {
+        const r = Math.floor(cell / N), c = cell % N;
+        if (gr.indexOf(r) >= 0) clash = 'hai con cùng hàng ' + (r + 1);
+        else if (gc.indexOf(c) >= 0) clash = 'hai con cùng cột ' + (c + 1);
+        else if (g[cell] >= 0 && greg.indexOf(g[cell]) >= 0) clash = 'hai con cùng vùng ' + PALETTE[g[cell] % PALETTE.length].name;
+        gr.push(r); gc.push(c); if (g[cell] >= 0) greg.push(g[cell]);
+      }
+      if (!clash) {
+        for (let a = 0; a < givens.length && !clash; a++) {
+          for (let b = a + 1; b < givens.length && !clash; b++) {
+            const ra = Math.floor(givens[a] / N), ca = givens[a] % N;
+            const rb = Math.floor(givens[b] / N), cb = givens[b] % N;
+            if (Math.abs(ra - rb) <= 1 && Math.abs(ca - cb) <= 1) clash = 'hai con chạm nhau';
+          }
+        }
+      }
+      if (givens.length > N) clash = 'đặt ' + givens.length + ' con nhưng bàn chỉ có ' + N;
+      checks.push([!clash, clash
+        ? '<b>' + givens.length + '</b> gấu đặt sẵn — SAI LUẬT: ' + clash
+        : '<b>' + givens.length + '</b> gấu đặt sẵn, hợp luật']);
+    }
+
     let solLine = null, scoreLine = null;
     if (structureOK && Brain) {
-      const res = Brain.countSolutions(N, gEngine, 3);
-      if (res.count === 0) {
+      /* Đếm nghiệm HAI LẦN: bàn trần để biết bố cục vùng có khoá chặt chưa,
+         và bàn đã tính gấu sẵn để biết đề bài thật sự có mấy lối giải. */
+      const bare = Brain.countSolutions(N, gEngine, 3);
+      const res = givens.length ? Brain.countSolutions(N, gEngine, 3, givens) : bare;
+      if (bare.count === 0) {
         checks.push([false, 'Không có cách xếp nào thoả luật — vùng đang bó quá chặt']);
+      } else if (givens.length && res.count === 0) {
+        checks.push([false, 'Gấu đặt sẵn nằm ngoài lời giải — bàn này thành vô nghiệm. Gỡ bớt hoặc dời chỗ.']);
+      } else if (bare.count > 1 && res.count > 1) {
+        checks.push([false, 'Có <b>' + (res.count >= 3 ? '≥3' : res.count) + '</b> nghiệm khác nhau — đổi biên vùng, hoặc đặt thêm gấu sẵn để khoá còn 1']);
       } else if (res.count > 1) {
-        checks.push([false, 'Có <b>' + (res.count >= 3 ? '≥3' : res.count) + '</b> nghiệm khác nhau — cần đổi biên vùng để khoá còn 1']);
+        checks.push([false, 'Có <b>' + (res.count >= 3 ? '≥3' : res.count) + '</b> nghiệm — đặt thêm gấu sẵn để khoá lại']);
       } else {
-        checks.push([true, 'Đúng <b>1 nghiệm duy nhất</b>']);
-        const profile = Brain.analyze(N, gEngine);
+        checks.push([true, givens.length
+          ? 'Đúng <b>1 nghiệm duy nhất</b> (đã tính gấu đặt sẵn)'
+          : 'Đúng <b>1 nghiệm duy nhất</b>']);
+        const profile = Brain.analyze(N, gEngine, givens);
         const sc = Brain.scoreLevel(N, gEngine, profile);
         designerLevel.solution = res.solutions[0].slice();
         if (profile.needsSearch) {
@@ -26225,6 +26392,7 @@ const LEVELS = [
     designerLevel = {
       id: '0', label: 'Custom', difficulty: 'Custom', size: lv.size,
       regionGrid: lv.regionGrid.slice(), solution: lv.solution.slice(),
+      givens: (lv.givens || []).slice(),
       name: 'Sửa từ ' + (lv.name || ('Level ' + lv.id)), heartsStart: 3, solver: { verifiedUnique: false }
     };
     if ($('dsSize')) $('dsSize').value = String(lv.size);
@@ -26266,20 +26434,27 @@ const LEVELS = [
     // engine đánh chỉ số mảng/bitmask theo id vùng nên phải dùng bản chuẩn hoá
     const norm = designerNormalized();
     const g = norm.regionGrid;
-    const res = Brain.countSolutions(N, g, 3);
+    /* Đếm nghiệm CÓ TÍNH gấu đặt sẵn — đó mới là đề bài người chơi nhận.
+       Một bố cục vùng có 3 nghiệm vẫn dùng được nếu gấu sẵn khoá về còn 1. */
+    const givens = (designerLevel.givens || []).slice();
+    const res = Brain.countSolutions(N, g, 3, givens);
     if (res.count === 0) {
       statusEl.className = 'note note-info';
-      statusEl.textContent = '❌ Map này KHÔNG có cách xếp nào thoả luật. Thử nới các vùng đang bó quá chặt.';
+      statusEl.textContent = givens.length
+        ? '❌ Map vô nghiệm: gấu đặt sẵn nằm ngoài mọi lời giải hợp luật. Dời hoặc gỡ bớt gấu.'
+        : '❌ Map này KHÔNG có cách xếp nào thoả luật. Thử nới các vùng đang bó quá chặt.';
       return;
     }
     if (res.count > 1) {
       statusEl.className = 'note note-info';
-      statusEl.textContent = '❌ Map có ' + (res.count >= 3 ? '≥3' : res.count) + ' nghiệm khác nhau — chưa dùng được. Hãy đổi biên vùng để khoá lại còn đúng 1 nghiệm.';
+      statusEl.textContent = '❌ Map có ' + (res.count >= 3 ? '≥3' : res.count) +
+        ' nghiệm khác nhau — chưa dùng được. Hãy đổi biên vùng' +
+        (givens.length ? '' : ' hoặc đặt thêm 🐼 gấu sẵn') + ' để khoá lại còn đúng 1 nghiệm.';
       return;
     }
 
     designerLevel.solution = res.solutions[0].slice();
-    const profile = Brain.analyze(N, g);
+    const profile = Brain.analyze(N, g, givens);
     const sc = Brain.scoreLevel(N, g, profile);
     const st = Brain.structure(N, g);
     designerLevel.solver = {
